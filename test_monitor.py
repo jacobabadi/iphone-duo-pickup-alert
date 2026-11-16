@@ -37,7 +37,7 @@ def observe(available, missing_stores=()):
 class StockAlerts(unittest.TestCase):
     def setUp(self):
         self.rec = Recorder()
-        self.mon = m.Monitor(m.new_state(), send=self.rec)
+        self.mon = m.Monitor(m.new_state(), send=self.rec, stock_only=False)
 
     def test_single_flip_alerts_once_with_link_and_store(self):
         self.mon.on_success(observe(set()), T0)
@@ -120,7 +120,7 @@ class StockAlerts(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "state.json")
             m.save_state(path, self.mon.state)
-            restarted = m.Monitor(m.load_state(path), send=self.rec)
+            restarted = m.Monitor(m.load_state(path), send=self.rec, stock_only=False)
         restarted.on_success(observe({(FIFTH, NS512)}), T0 + 60)
         self.assertEqual(len(self.rec.sent), 1)
 
@@ -144,7 +144,7 @@ class StockAlerts(unittest.TestCase):
 class FailureAlerts(unittest.TestCase):
     def setUp(self):
         self.rec = Recorder()
-        self.mon = m.Monitor(m.new_state(), send=self.rec)
+        self.mon = m.Monitor(m.new_state(), send=self.rec, stock_only=False)
 
     def test_alert_after_five_failures_once(self):
         for i in range(4):
@@ -184,6 +184,30 @@ class FailureAlerts(unittest.TestCase):
         self.assertEqual(self.rec.titles().count("iPhone Duo monitor is failing"), 2)
         self.mon.on_failure("x", T0 + 20)
         self.assertEqual(self.rec.titles().count("iPhone Duo monitor is failing"), 2)
+
+
+class StockAlertsOnly(unittest.TestCase):
+    """Default mode: the phone only ever gets 'in stock' pushes."""
+
+    def test_default_is_stock_only(self):
+        self.assertTrue(m.Monitor(m.new_state()).stock_only)
+
+    def test_only_stock_alerts_reach_the_phone(self):
+        sent = []
+        mon = m.Monitor(m.new_state(), send=lambda t, msg, p, **kw: sent.append(t) or True,
+                        stock_only=True)
+        mon.on_success(observe(set()), T0)                    # would send the daily heartbeat
+        mon.on_success(observe({(FIFTH, NS512)}), T0 + 30)    # in stock -> pushed
+        mon.on_success(observe(set()), T0 + 60)
+        mon.on_success(observe(set()), T0 + 90)               # sold out -> logged only
+        for i in range(8):
+            mon.on_failure("HTTP 541", T0 + 120 + i)          # failing -> logged only
+        mon.on_success(observe(set()), T0 + 300)              # recovered -> logged only
+        mon.on_success(observe({(SOHO, SW512)}), T0 + 330)    # in stock -> pushed
+        self.assertEqual(sent, ["iPhone Duo 512GB Night Sky in stock for pickup",
+                                "iPhone Duo 512GB Star White in stock for pickup"])
+        self.assertEqual(mon.state["fail_alert_day"], m.local_day(T0))  # muted, not retried
+        self.assertNotIn(f"{FIFTH}|{NS512}", mon.state["pairs"])       # sold out still tracked
 
 
 class Parsing(unittest.TestCase):

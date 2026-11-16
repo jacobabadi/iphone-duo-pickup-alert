@@ -74,6 +74,9 @@ USER_AGENT = (
 
 NTFY_TOPIC = os.getenv("NTFY_TOPIC", "").strip()
 NTFY_SERVER = os.getenv("NTFY_SERVER", "https://ntfy.sh").rstrip("/")
+# Push only "in stock" alerts. Sold-out, failing, recovered and daily-heartbeat messages are
+# still written to the log but never sent to the phone. Set STOCK_ALERTS_ONLY=0 to get them all.
+STOCK_ALERTS_ONLY = os.getenv("STOCK_ALERTS_ONLY", "1") != "0"
 
 # Never poll faster than this: Apple blocks clients that hammer the endpoint.
 MIN_INTERVAL = 30
@@ -273,9 +276,17 @@ def local_day(epoch):
 
 
 class Monitor:
-    def __init__(self, state, send=notify):
+    def __init__(self, state, send=notify, stock_only=None):
         self.state = state
         self.send = send
+        self.stock_only = STOCK_ALERTS_ONLY if stock_only is None else stock_only
+
+    def _info(self, title, message, priority, **kw):
+        """Non-stock messages: pushed normally, or only logged when stock_only is on."""
+        if self.stock_only:
+            log(f"muted (stock alerts only): {title}: {message.splitlines()[0]}")
+            return True
+        return self.send(title, message, priority, **kw)
 
     def on_success(self, observed, now):
         st = self.state
@@ -285,7 +296,7 @@ class Monitor:
             st["pairs"] = {}
 
         if st["fail_alerted"]:
-            self.send("iPhone Duo monitor recovered",
+            self._info("iPhone Duo monitor recovered",
                       "Apple is answering again. Stock alerts are back on.", PRIORITY_QUIET)
         st["failures"] = 0
         st["fail_alerted"] = False
@@ -312,7 +323,7 @@ class Monitor:
 
         today = local_day(now)
         if st["heartbeat_day"] != today:
-            if self.send("iPhone Duo monitor is watching",
+            if self._info("iPhone Duo monitor is watching",
                          f"Checking {len(PARTS)} configs at {len(STORES)} stores every "
                          f"{INTERVAL}s, {WINDOW_START}:00 to {WINDOW_END}:00 Eastern.", PRIORITY_MIN):
                 st["heartbeat_day"] = today
@@ -349,7 +360,7 @@ class Monitor:
                 lasted = format_duration(info["last_seen"] - info["since"] + INTERVAL / 2)
                 lines.append(f"{STORES[store]}: {config_name(part)} (lasted {lasted})")
         if lines:
-            self.send("Sold out", "\n".join(lines), PRIORITY_GONE, tags=["x"])
+            self._info("Sold out", "\n".join(lines), PRIORITY_GONE, tags=["x"])
 
     def on_failure(self, reason, now):
         st = self.state
@@ -358,7 +369,7 @@ class Monitor:
         today = local_day(now)
         # At most one failing alert per calendar day, even if the outage spans several days.
         if st["failures"] >= FAIL_ALERT_AFTER and st["fail_alert_day"] != today:
-            if self.send("iPhone Duo monitor is failing",
+            if self._info("iPhone Duo monitor is failing",
                          f"{st['failures']} checks in a row failed (last error: {reason}). "
                          "You will not get stock alerts until Apple answers again. "
                          "This alert won't repeat today.", PRIORITY_FAILING, tags=["warning"]):
@@ -577,10 +588,13 @@ def simulate(send_for_real):
             now += INTERVAL
     stock = [t for t, _ in sent if "in stock" in t]
     gone = [t for t, _ in sent if t == "Sold out"]
-    print(f"\n  stock alerts sent: {len(stock)} (expected 1)")
-    print(f"  sold-out messages: {len(gone)} (expected 1)")
+    want_gone = 0 if STOCK_ALERTS_ONLY else 1
+    mode = "stock alerts only: sold-out is logged, not pushed" if STOCK_ALERTS_ONLY else "all messages"
+    print(f"\n  mode: {mode}")
+    print(f"  stock alerts sent: {len(stock)} (expected 1)")
+    print(f"  sold-out messages: {len(gone)} (expected {want_gone})")
     print(f"  other messages:    {len(sent) - len(stock) - len(gone)} (expected 0)")
-    passed = len(stock) == 1 and len(gone) == 1 and len(sent) == 2
+    passed = len(stock) == 1 and len(gone) == want_gone and len(sent) == 1 + want_gone
     print("  SIMULATION PASSED" if passed else "  SIMULATION FAILED")
     return 0 if passed else 1
 

@@ -33,11 +33,15 @@ Apple returns the 12 stores nearest ZIP 10001, each with
 - **Stock alert** (ntfy priority 5, *urgent*): sent once when a (store, config) pair flips from
   unavailable to available. One push per config listing the store(s), with a Buy button and a
   tap-through link to that config's apple.com buy page. If ntfy is down, it retries on the next check.
-- **Sold out** (priority 3): after two consecutive "unavailable" answers, with how long it lasted.
-- **Monitor is failing** (priority 4): after 5 failed checks in a row, at most once per day.
-  A quiet "recovered" note (priority 2) follows when Apple answers again.
-- **Daily heartbeat** (priority 1, silent): one "monitor is watching" note on the first good check
-  of the day. If you don't see it in the ntfy app by ~7:05 AM, the workflow isn't running.
+- **Everything else is muted by default** (`STOCK_ALERTS_ONLY=1`): your phone only ever gets
+  "in stock" pushes. These are written to the Actions log instead, and come back with
+  `STOCK_ALERTS_ONLY=0` in the workflow's `env`:
+  - *Sold out* (priority 3): after two consecutive "unavailable" answers, with how long it lasted.
+  - *Monitor is failing* (priority 4): after 5 failed checks in a row, at most once per day,
+    then *recovered* (priority 2) when Apple answers again.
+  - *Daily heartbeat* (priority 1, silent): "monitor is watching" on the first good check of the day.
+  
+  With these muted, a broken monitor is silent: glance at the Actions tab now and then.
 - A failed, blocked (HTTP 541/403), non-JSON or partial response is **unknown**, never "out of
   stock": it can't trigger a sold-out message or a duplicate alert.
 - **State** (`state.json`: what's been alerted, failure streak) is saved after every check and
@@ -50,8 +54,10 @@ Apple returns the 12 stores nearest ZIP 10001, each with
 `.github/workflows/monitor.yml` is one long-running job. GitHub caps jobs at 6 hours, so each run
 exits after ~5 h 45 m and immediately dispatches the next. The `monitor` concurrency group
 guarantees two copies never overlap: the new run waits as *pending* and starts the moment the
-old one finishes. Cron fires every 30 min as a backstop and for the morning start (a run that
-starts before 7 AM waits for 7:00). Runs triggered outside 7 AM-10 PM ET exit in seconds, and
+old one finishes. The morning start comes from [cron-job.org](https://cron-job.org), which calls
+GitHub's `workflow_dispatch` API every 20 min from 6:00 to 9:40 AM ET (a run that starts before
+7 AM waits for 7:00; later calls while a run is going just queue and get replaced). GitHub's own
+cron entries stay as an extra backstop. Runs triggered outside 7 AM-10 PM ET exit in seconds, and
 pending runs replaced by newer ones show as *cancelled*. Both are expected.
 
 The repo is public so Actions minutes are free. The only secret is `NTFY_TOPIC`.
@@ -65,8 +71,14 @@ The repo is public so Actions minutes are free. The only secret is `NTFY_TOPIC`.
    notifications, turn on **Time Sensitive Notifications**, and add ntfy to your Focus modes'
    allowed apps.
 3. **Verify:** Actions → *verify* → Run workflow. You should get a test push plus a simulated
-   restock (`[TEST]` alert, then `[TEST] Sold out`).
-4. **Start:** Actions → *monitor* → Run workflow (or wait for the next cron tick).
+   restock (`[TEST] ... in stock for pickup`).
+4. **Start:** Actions → *monitor* → Run workflow (or wait for the next morning trigger).
+5. **Morning trigger (cron-job.org):** a job that sends `POST
+   https://api.github.com/repos/jacobabadi/iphone-duo-pickup-alert/actions/workflows/monitor.yml/dispatches`
+   with body `{"ref":"main"}` and headers `Accept: application/vnd.github+json`,
+   `X-GitHub-Api-Version: 2022-11-28`, `Authorization: Bearer <token>`. The token is a GitHub
+   fine-grained personal access token for this repo only, with **Actions: Read and write**.
+   GitHub answers `204` on success. Schedule: America/New_York, hours 6-9, minutes 0/20/40.
 
 ## Commands
 
@@ -143,7 +155,8 @@ launchctl bootout gui/$(id -u)/local.iphone-duo-pickup-alert
 - Unofficial, undocumented endpoint; Apple can change or block it at any time. The failing alert
   and the daily heartbeat are there so you find out.
 - Do **not** use `/shop/fulfillment-messages`: it returns HTTP 541 to non-browser clients.
-- GitHub's cron is best-effort and can run late. That's why each run chains the next one itself.
+- GitHub's cron is best-effort and, on this repo, never fired at all. That's why each run chains
+  the next one itself and cron-job.org handles the morning start.
 
 ## Credits
 
