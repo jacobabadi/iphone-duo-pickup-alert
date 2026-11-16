@@ -374,6 +374,12 @@ def window_bounds(now_local):
     return midnight + timedelta(hours=WINDOW_START), midnight + timedelta(hours=WINDOW_END)
 
 
+def annotate(level, title, message):
+    """Show a note on the GitHub Actions run page (visible while the job is still running)."""
+    if os.getenv("GITHUB_ACTIONS") == "true":
+        print(f"::{level} title={title}::{message}", flush=True)
+
+
 def set_github_output(name, value):
     path = os.getenv("GITHUB_OUTPUT")
     if path:
@@ -394,6 +400,7 @@ def run(state_path, max_runtime, wait_for_window, forever=False):
     exit_reason = "stopped"
 
     announced_wait = None
+    checks = failed = 0
     while not STOP.is_set():
         now_local = datetime.now(TZ)
         start, end = window_bounds(now_local)
@@ -415,22 +422,32 @@ def run(state_path, max_runtime, wait_for_window, forever=False):
             break
 
         started = time.monotonic()
+        checks += 1
         try:
             observed, seen = parse_availability(fetch_stores())
             monitor.on_success(observed, time.time())
+            if checks - failed == 1:
+                annotate("notice", "Monitor running",
+                         f"First check OK at {datetime.now(TZ):%H:%M} ET: {len(seen)}/{len(STORES)} stores, "
+                         f"{len(observed)}/{len(STORES) * len(PARTS)} store-config pairs answered.")
             available = sorted(f"{STORES[s]}/{config_name(p)}" for (s, p), a in observed.items() if a)
             log(f"ok stores={len(seen)}/{len(STORES)} pairs={len(observed)} "
                 f"available={len(available)} {', '.join(available)}".rstrip()
                 + f" ({int((time.monotonic() - started) * 1000)} ms)")
         except CheckFailed as exc:
+            failed += 1
             monitor.on_failure(str(exc), time.time())
         except Exception as exc:  # a bug must not kill the loop; it counts as a failed check
+            failed += 1
             monitor.on_failure(f"internal error {type(exc).__name__}: {exc}", time.time())
         save_state(state_path, state)
         STOP.wait(max(0.0, started + INTERVAL + random.uniform(0, 3) - time.monotonic()))
 
     save_state(state_path, state)
     log(f"exiting: {exit_reason}")
+    if checks:
+        annotate("warning" if failed > checks / 2 else "notice", "Run summary",
+                 f"{checks} checks, {failed} failed. Exit reason: {exit_reason}.")
     # Tell the workflow to start the next run right away if we stopped only for the job time limit.
     set_github_output("continue", "true" if exit_reason == "max runtime" else "false")
 
