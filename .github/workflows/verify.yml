@@ -1,0 +1,40 @@
+name: verify
+# Checks the monitor end to end from a GitHub runner. Runs on code changes; the two
+# steps that push to your phone only run when started by hand (Run workflow button).
+
+on:
+  push:
+    paths: ["monitor.py", "test_monitor.py", ".github/workflows/verify.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Unit tests
+        run: python3 -m unittest -v test_monitor
+
+      - name: Apple's pickup endpoint from this runner
+        run: python3 monitor.py --once
+
+      - name: Buy-page links open the right configs
+        run: python3 monitor.py --check-links
+
+      - name: Simulated restock fires exactly one alert (no push)
+        run: NTFY_TOPIC= python3 monitor.py --simulate
+
+      - name: Send a test notification
+        if: env.NTFY_TOPIC != '' && github.event_name == 'workflow_dispatch'
+        run: python3 monitor.py --test-notify
+
+      - name: Simulated restock with real [TEST] pushes
+        if: env.NTFY_TOPIC != '' && github.event_name == 'workflow_dispatch'
+        run: python3 monitor.py --simulate --send

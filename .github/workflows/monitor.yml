@@ -1,0 +1,65 @@
+name: monitor
+# Long-running watcher: checks every 30 s from 7 AM to 10 PM America/New_York.
+# GitHub caps a job at 6 h, so each run exits after ~5 h 45 m and immediately starts
+# the next one. The cron entries are only a backstop (and the morning start); runs
+# that fire outside store hours exit within seconds.
+
+on:
+  schedule:
+    - cron: "7,37 10-23 * * *"   # UTC; covers 6 AM ET onward in both EST and EDT
+    - cron: "7,37 0-2 * * *"     # UTC; covers up to 10 PM EST
+  workflow_dispatch:
+
+# Never two copies at once. A newly triggered run waits (pending) until the current
+# one finishes, then starts right away, so restarts leave only a ~1 min gap.
+concurrency:
+  group: monitor
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: write   # start the next run, keep the schedule from being auto-disabled
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    env:
+      NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Restore alert state from the previous run
+        uses: actions/cache/restore@v6
+        with:
+          path: state.json
+          key: monitor-state-${{ github.run_id }}
+          restore-keys: monitor-state-
+
+      - name: Watch for 512GB iPhone Duo pickup stock
+        id: watch
+        if: env.NTFY_TOPIC != ''
+        run: python3 monitor.py --state state.json --max-runtime 20700 --wait-for-window 5400
+
+      - name: NTFY_TOPIC secret missing
+        if: env.NTFY_TOPIC == ''
+        run: echo "::warning::The NTFY_TOPIC secret is not set, so nothing is being watched."
+
+      - name: Save alert state for the next run
+        if: always() && steps.watch.outcome != 'skipped'
+        uses: actions/cache/save@v6
+        with:
+          path: state.json
+          key: monitor-state-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Start the next run now
+        if: always() && steps.watch.outputs.continue == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run monitor.yml --repo "$GITHUB_REPOSITORY" --ref "$GITHUB_REF_NAME"
+
+      - name: Keep the schedule from being auto-disabled after 60 quiet days
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api -X PUT "repos/$GITHUB_REPOSITORY/actions/workflows/monitor.yml/enable" || true
