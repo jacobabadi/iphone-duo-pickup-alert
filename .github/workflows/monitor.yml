@@ -26,6 +26,8 @@ jobs:
     timeout-minutes: 355
     env:
       NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+      # At 30 s Apple's rate limiter answered HTTP 541 for ~30 min out of every hour.
+      INTERVAL: "40"
     steps:
       - uses: actions/checkout@v7
 

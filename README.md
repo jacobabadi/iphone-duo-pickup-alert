@@ -27,8 +27,9 @@ GET https://www.apple.com/shop/retail/pickup-message?pl=true&location=10001&part
 ```
 
 Apple returns the 12 stores nearest ZIP 10001, each with
-`partsAvailability[<part>].pickupDisplay` = `available` / `unavailable`. One request every 30 s
-(plus 0-3 s jitter, never faster), 7 AM to 10 PM Eastern.
+`partsAvailability[<part>].pickupDisplay` = `available` / `unavailable`. One request every 40 s
+(plus 0-3 s jitter; `INTERVAL` in the workflow, never below 30), 7 AM to 10 PM Eastern. At 30 s,
+Apple's rate limiter blocked the runner (HTTP 541) for roughly 30 minutes out of every hour.
 
 - **Stock alert** (ntfy priority 5, *urgent*): sent once when a (store, config) pair flips from
   unavailable to available. One push per config listing the store(s), with a Buy button and a
