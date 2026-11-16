@@ -375,7 +375,7 @@ def window_bounds(now_local):
 
 
 def annotate(level, title, message):
-    """Show a note on the GitHub Actions run page (visible while the job is still running)."""
+    """Attach a note to the GitHub Actions run (shown on the run page once the step ends)."""
     if os.getenv("GITHUB_ACTIONS") == "true":
         print(f"::{level} title={title}::{message}", flush=True)
 
