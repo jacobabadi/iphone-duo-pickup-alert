@@ -6,8 +6,8 @@ name: monitor
 
 on:
   schedule:
-    - cron: "7,37 10-23 * * *"   # UTC; covers 6 AM ET onward in both EST and EDT
-    - cron: "7,37 0-2 * * *"     # UTC; covers up to 10 PM EST
+    - cron: "8,38 10-23 * * *"   # UTC; covers 6 AM ET onward in both EST and EDT
+    - cron: "8,38 0-2 * * *"     # UTC; covers up to 10 PM EST
   workflow_dispatch:
 
 # Never two copies at once. A newly triggered run waits (pending) until the current
